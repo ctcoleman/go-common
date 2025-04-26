@@ -1,4 +1,4 @@
-module github.com/deeuser/go-common/netconfc
+module github.com/ctcoleman/go-common/netconfc
 
 go 1.23.2
 
