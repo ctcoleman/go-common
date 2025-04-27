@@ -52,7 +52,6 @@ func NewClient(cfg *Config) (*Client, error) {
 		return nil, fmt.Errorf("invalid netconfc config - timeout must be greater than 0")
 	}
 	if cfg.Port < 0 || cfg.Port == 0 {
-		log.Printf("invalid port %d - using default NETCONF port 830\n", cfg.Port)
 		cfg.Port = 830
 	}
 
