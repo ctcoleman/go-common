@@ -1,38 +1,84 @@
 package netconfc
 
 import (
-	"bufio"
 	"fmt"
+	"log"
 	"os"
+	"strings"
+	"time"
 
 	"github.com/Juniper/go-netconf/netconf"
 	"golang.org/x/crypto/ssh"
-	"golang.org/x/term"
 )
 
 // Client encapsulates SSH/NETCONF data and methods
 type Client struct {
-	host string
-	user string
-	pass string
-	conf *ssh.ClientConfig
-	Sess *netconf.Session
+	host    string
+	user    string
+	pass    string
+	port    uint16
+	timeout time.Duration
+	conf    *ssh.ClientConfig
+	logging *log.Logger
+	Sess    *netconf.Session
 }
 
-// NewClient creates a new NETCONF client
-// Return Client or error
-func NewClient(host, user, pass string) (*Client, error) {
-	c := &Client{
-		host: host,
-		user: user,
-		pass: pass,
-		conf: &ssh.ClientConfig{},
-		Sess: &netconf.Session{},
+// Config will hold the configuration options for the NETCONF connection
+type Config struct {
+	Host    string
+	User    string
+	Pass    string
+	Port    uint16
+	Timeout time.Duration
+	Logging *log.Logger
+	// TODO add ssh agent and key configuration options
+}
+
+// NewClient checks the given config and creates a new client if valid
+func NewClient(cfg *Config) (*Client, error) {
+	if cfg == nil {
+		return nil, fmt.Errorf("invalid netconfc config - config is nil")
+	}
+	if cfg.Host == "" {
+		return nil, fmt.Errorf("invalid netconfc config - host is empty")
+	}
+	if cfg.User == "" {
+		return nil, fmt.Errorf("invalid netconfc config - user is empty")
+	}
+	if cfg.Pass == "" {
+		return nil, fmt.Errorf("invalid netconfc config - pass is empty")
+	}
+	if cfg.Timeout < 0 {
+		return nil, fmt.Errorf("invalid netconfc config - timeout must be greater than 0")
+	}
+	if cfg.Port < 0 || cfg.Port == 0 {
+		log.Printf("invalid port %d - using default NETCONF port 830\n", cfg.Port)
+		cfg.Port = 830
 	}
 
-	if err := c.buildConfig(); err != nil {
-		return nil, err
+	c := &Client{
+		host:    cfg.Host,
+		user:    cfg.User,
+		pass:    cfg.Pass,
+		port:    cfg.Port,
+		timeout: cfg.Timeout,
+		logging: cfg.Logging,
+		conf:    &ssh.ClientConfig{},
+		Sess:    &netconf.Session{},
 	}
+
+	if c.logging == nil {
+		log.Println("no logger provided. logging to stdout")
+		c.logging = log.New(os.Stdout, "", log.LstdFlags)
+	}
+
+	if c.timeout == 0 {
+		c.timeout = 30 * time.Second
+	}
+
+	c.conf = netconf.SSHConfigPassword(c.user, c.pass)
+
+	c.logging.Printf("created new netconf client:\n+ host: %s\n+ user: %s\n+ port: %d\n", c.host, c.user, c.port)
 
 	return c, nil
 }
@@ -40,21 +86,28 @@ func NewClient(host, user, pass string) (*Client, error) {
 // Open opens a netconf session
 // Returns error is session fails to open
 func (c *Client) Open() error {
-	s, err := netconf.DialSSH(c.host, c.conf)
+	h := c.host
+	if c.port != 830 {
+		h = strings.Join([]string{c.host, fmt.Sprint(c.port)}, ":")
+	}
+
+	c.logging.Printf("dialing host %s\n", h)
+
+	s, err := netconf.DialSSH(h, c.conf)
 	if err != nil {
-		return fmt.Errorf("unable to dial host - %v", err)
+		return fmt.Errorf("unable to dial host - %w", err)
 	}
 
 	c.Sess = s
-
 	return nil
 }
 
 // Close closes the netconf session gracefully
 // Returns error if session is not gracefully closed
 func (c *Client) Close() error {
+	c.logging.Println("closing netconf session")
 	if err := c.Sess.Close(); err != nil {
-		return fmt.Errorf("failed to gracefully close session - %v", err)
+		return fmt.Errorf("failed to gracefully close session - %w", err)
 	}
 
 	return nil
@@ -63,35 +116,16 @@ func (c *Client) Close() error {
 // Execute exectues the provided RPC method
 // Returns RPC reply or error
 func (c *Client) Execute(m string) (*netconf.RPCReply, error) {
+	c.logging.Printf("executing rpc method - %s", m)
 	r, err := c.Sess.Exec(netconf.RawMethod(m))
 	if err != nil {
-		return nil, err
+		return nil, fmt.Errorf("failed to make rpc call %s - %w", m, err)
 	}
 
 	return r, nil
 }
 
-// buildConfig builds a new ssh/netconf client config
-// TODO -- add pubkey and agent support
-func (c *Client) buildConfig() error {
-	if c.user == "" {
-		if err := c.getUser(); err != nil {
-			return fmt.Errorf("failed to read username - %v", err)
-		}
-	}
-
-	if c.pass == "" {
-		err := c.getPass()
-		if err != nil {
-			return fmt.Errorf("failed to read password - %v", err)
-		}
-	}
-
-	c.conf = netconf.SSHConfigPassword(c.user, c.pass)
-
-	return nil
-}
-
+/* leave it to the program to ask the user for the user and password, not the library
 // getPass asks the user for a password
 func (c *Client) getPass() error {
 	fmt.Print("Password: ")
@@ -124,3 +158,4 @@ func (c *Client) getUser() error {
 
 	return nil
 }
+*/
